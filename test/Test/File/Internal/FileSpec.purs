@@ -68,6 +68,11 @@ spec = describe "File internal tests" do
       sizeIs 8
       posIs 8
       
+    run "truncate file" do
+      File.truncate 1
+      textIs "h"
+      sizeIs 1
+      
     run "open-truncate and write" do
       File.openTruncated
       sizeIs 0
