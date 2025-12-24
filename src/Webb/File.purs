@@ -88,3 +88,9 @@ readLine file = eval file Prog.readLine
 
 readLineSepBy :: forall m. MonadAff m => File -> String -> m String
 readLineSepBy file sep = eval file $ Prog.readLineSepBy sep
+
+readAllText :: forall m. MonadAff m => File -> m String
+readAllText file = eval file Prog.readAllText
+
+writeAllText :: forall m. MonadAff m => File -> String -> m Unit
+writeAllText file str = eval file $ Prog.writeAllText str
