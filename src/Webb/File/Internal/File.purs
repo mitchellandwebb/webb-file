@@ -139,7 +139,9 @@ truncate n =  do
 seek :: Int -> Prog Unit
 seek n = do
   this <- mread
-  File.setPosition (max n 0) :> this.file
+  size' <- size
+  let maxPos = max 0 (size') -- At position 'size', we are writing to end of file.
+  File.setPosition (clamp 0 maxPos n) :> this.file
 
 -- Change the file's position by a relative amount.
 seekBy :: Int -> Prog Unit
@@ -163,24 +165,36 @@ writeBuffer buf = do
     -- An append file _should_ write to the end, naturally.
     void (FS.fdWrite fd buf 0 length Nothing) # liftAff
   else do
+    -- We only advance the file position if it wasn't an append.
     void (FS.fdWrite fd buf 0 length $ Just pos) # liftAff
-
-  seekBy length -- We advance the file position.
+    seekBy length -- We advance the file position.
   
 -- Are we at the end? We're at the end if attempting to read does nothing.
 isEof :: Prog Boolean
 isEof = do
-  _buffer /\ count <- peekBuffer 1
-  pure $ count <= 0
+  ifM isOpen (do
+    _buffer /\ count <- peekBuffer 1
+    pure $ count <= 0
+  ) (do 
+    pure false
+  )
 
 -- Peek the next `n` notes at the current position.
+-- Buffer size consists ONLY of values that were read, so no count of the buffer
+-- is needed.
 peekBuffer :: Int -> Prog (Buffer /\ Int)
 peekBuffer n = do
   pos <- position
   fd <- forceFd
   buffer <- Buffer.create n # liftEffect
   count <- FS.fdRead fd buffer 0 n (Just pos) # liftAff
-  pure $ buffer /\ count
+  pure $ take count buffer /\ count
+
+  where
+  -- limit the buffer to size N
+  take n' buffer = let 
+    minimalBuffer = Buffer.slice 0 n' buffer
+    in minimalBuffer
   
 -- From the file position, attempt to read N bytes. Return a byte buffer and
 -- the number of bytes that was actually read.
@@ -208,27 +222,29 @@ readString n = do
   pure prefix
   
   where
+
   getPrefix str = do
     pure $ String.take n str
 
   moveForwardBy str = do
-    buffer <- Buffer.fromString str UTF8 # liftEffect
-    count <- Buffer.size buffer # liftEffect
     -- When we've found the right count, _then_ we change it.
-    seekBy count 
+    stringSize <- byteCount str
+    seekBy stringSize 
 
 -- Read a line in UTF8. The newline is discarded.
 -- Checking for EOF should be done separately.
 readLine :: Prog String
 readLine = readLineSepBy "\n"
 
+readLineSepBy :: String -> Prog String
+readLineSepBy sep = readLineSepBy' 256 sep
+
 -- Separate lines by a custom string delimiter. The delimiter is ignored
 -- in what is read. Checking for EOF should be done separately.
 -- We assume a (hopefully reasonable) chunk size, and continue until we find
 -- the delimiter.
-readLineSepBy :: String -> Prog String
-readLineSepBy sep = do
-  let chunkSize = 256
+readLineSepBy' :: Int -> String -> Prog String
+readLineSepBy' chunkSize sep = do
   strings <- ArrayColl.newArray
   continue <- newShowRef true
   
@@ -238,16 +254,18 @@ readLineSepBy sep = do
 
     if hasSep string then do
       -- Add the last part of the line, and then stop.
-      last <- getPrefix string
-      ArrayColl.addLast strings last
+      prefix <- getPrefix string
+      ArrayColl.addLast strings prefix
+      moveFileForwardBy prefix
+      moveFileForwardBy sep
       continue := false
     else do 
-      -- Pattern was not found. Add the string and then continue.
+      -- Pattern was not found. Add the ENTIRE string and then continue.
       ArrayColl.addLast strings string
+      moveFileForwardBy string
       continue := true
     
   actualString <- getString strings
-  moveFileForwardBy actualString
   pure actualString
   
   where 
@@ -266,6 +284,23 @@ readLineSepBy sep = do
     pure $ String.joinWith "" chunks
     
   moveFileForwardBy string = do
-    buffer <- Buffer.fromString string UTF8 # liftEffect
-    count <- Buffer.size buffer # liftEffect
-    seekBy (count + String.length sep)
+    stringSize <- byteCount string
+    seekBy stringSize
+    
+byteCount :: String -> Prog Int
+byteCount string = do
+  buffer <- Buffer.fromString string UTF8 # liftEffect
+  count <- Buffer.size buffer # liftEffect
+  pure count
+
+readAllText :: Prog String
+readAllText = do
+  p <- path
+  let path' = Abs.unwrap p
+  FS.readTextFile UTF8 path' # liftAff
+
+writeAllText :: String -> Prog Unit
+writeAllText text = do
+  p <- path
+  let path' = Abs.unwrap p
+  FS.writeTextFile UTF8 path' text # liftAff
