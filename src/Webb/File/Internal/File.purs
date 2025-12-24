@@ -130,8 +130,13 @@ size = do
 truncate :: Int -> Prog Unit
 truncate n =  do 
   abs <- path
-  whenM isClosed do
-    FS.truncate (Abs.unwrap abs) n # liftAff
+  FS.truncate (Abs.unwrap abs) n # liftAff
+
+  -- To keep valid position, including if truncation is too LARGE
+  -- for the file, we move our position to stay in alignment.
+  pos <- position
+  newSize <- size
+  seek (min pos newSize)
   
 -- Seek the file's position to a particular place in the file. The File
 -- always performs read/write operations from its current position.

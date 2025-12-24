@@ -69,9 +69,22 @@ spec = describe "File internal tests" do
       posIs 8
       
     run "truncate file" do
+      File.open
       File.truncate 1
       textIs "h"
       sizeIs 1
+      posIs 0
+      s <- File.readString 1
+      s === "h"
+
+    run "truncate while position is beyond" do
+      File.open
+      File.seek 1
+      File.truncate 1
+      textIs "h"
+      posIs 1
+      s <- File.readString 1
+      s === ""
       
     run "open-truncate and write" do
       File.openTruncated
