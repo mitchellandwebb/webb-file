@@ -1,0 +1,43 @@
+package:
+  name: webb-file
+  dependencies:
+    - aff
+    - arrays
+    - effect
+    - foldable-traversable
+    - identity
+    - maybe
+    - monad-loops
+    - newtype
+    - node-buffer
+    - node-fs
+    - node-path
+    - node-process
+    - ordered-collections
+    - prelude
+    - strings
+    - transformers
+    - tuples
+    - unicode
+    - unsafe-coerce
+    - webb-directory
+    - webb-monad
+    - webb-refer
+    - webb-random
+  test:
+    main: Test.Main
+    dependencies:
+      - spec
+      - spec-discovery
+      - spec-node
+      - webb-test
+workspace:
+  packageSet:
+    registry: 68.10.1
+  extraPackages:
+    spec-discovery: 8.2.0
+    webb-test: 0.0.1
+    webb-directory: 0.0.1
+    webb-refer: 0.0.3
+    webb-monad: 0.0.2
+    webb-random: 0.0.1
