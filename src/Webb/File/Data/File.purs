@@ -20,6 +20,16 @@ newtype File = F File_
 instance Eq File where
   eq a b = id a == id b
 
+derive instance Newtype File _
+instance Show File where
+  show (F s) = show 
+    { path: s.path
+    , id: s.id
+    , position: s.position
+    , appending: s.appending
+    , fd: const unit <$> s.fd
+    }
+
 type File_ = 
   { path :: AbsolutePath
   , fd :: Maybe Fd
@@ -43,7 +53,6 @@ _position = prop (Proxy :: Proxy "position")
 _appending :: forall a r. Lens' { appending :: a | r } a
 _appending = prop (Proxy :: Proxy "appending")
   
-derive instance Newtype File _
 
 type Fd = FileDescriptor
 

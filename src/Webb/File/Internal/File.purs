@@ -3,22 +3,28 @@ module Webb.File.Internal.File where
 import Prelude
 import Webb.State.Prelude
 
-import Control.Monad.State (StateT)
+import Control.Monad.Loops (whileM_)
+import Control.Monad.State (StateT, evalStateT)
+import Data.Array as Array
 import Data.Foldable (for_)
 import Data.Int as Int
 import Data.Maybe (Maybe(..), fromMaybe)
+import Data.String as String
+import Data.Tuple (fst)
 import Data.Tuple.Nested ((/\), type (/\))
 import Effect.Aff (Aff)
 import Effect.Aff.Class (liftAff)
 import Effect.Class (liftEffect)
 import Node.Buffer (Buffer)
 import Node.Buffer as Buffer
+import Node.Encoding (Encoding(..))
 import Node.FS (FileFlags(..))
 import Node.FS.Aff as FS
 import Node.FS.Stats as Stat
 import Webb.Directory.Data.Absolute as Abs
 import Webb.File.Data.File as File
-import Webb.Monad.Prelude (forceMaybe', notM)
+import Webb.Monad.Prelude (forceMaybe', notM, (&&=))
+import Webb.Stateful.ArrayColl as ArrayColl
 
 
 
@@ -32,6 +38,9 @@ type State =
   }
   
 type Prog = StateT State Aff
+
+eval :: forall a. State -> Prog a -> Aff a
+eval state prog = evalStateT prog state
 
 path :: Prog Abs.AbsPath
 path = do
@@ -158,7 +167,6 @@ writeBuffer buf = do
 
   seekBy length -- We advance the file position.
   
-  
 -- Are we at the end? We're at the end if attempting to read does nothing.
 isEof :: Prog Boolean
 isEof = do
@@ -175,10 +183,89 @@ peekBuffer n = do
   pure $ buffer /\ count
   
 -- From the file position, attempt to read N bytes. Return a byte buffer and
--- the number of bytes that was read.
+-- the number of bytes that was actually read.
 readBuffer :: Int -> Prog (Buffer /\ Int)
 readBuffer n = do
   result@(_buffer /\ count) <- peekBuffer n
   seekBy count -- advance the recorded position after reading.
   pure result
   
+-- Write a string of length N with UTF-8 encoding, since UTF-8 is best-supported
+-- and is compatible with ASCII; UTF-16 is incompatible.
+writeString :: String -> Prog Unit
+writeString s = do
+  buf <- Buffer.fromString s UTF8 # liftEffect
+  writeBuffer buf
+
+-- Reads a string of length N with UTF-8 encoding
+readString :: Int -> Prog String
+readString n = do
+  let maxCount = n * 4
+  buffer <- fst <$> peekBuffer maxCount -- Only peek. Don't change file position.
+  string <- Buffer.toString UTF8 buffer # liftEffect
+  prefix <- getPrefix string
+  moveForwardBy prefix
+  pure prefix
+  
+  where
+  getPrefix str = do
+    pure $ String.take n str
+
+  moveForwardBy str = do
+    buffer <- Buffer.fromString str UTF8 # liftEffect
+    count <- Buffer.size buffer # liftEffect
+    -- When we've found the right count, _then_ we change it.
+    seekBy count 
+
+-- Read a line in UTF8. The newline is discarded.
+-- Checking for EOF should be done separately.
+readLine :: Prog String
+readLine = readLineSepBy "\n"
+
+-- Separate lines by a custom string delimiter. The delimiter is ignored
+-- in what is read. Checking for EOF should be done separately.
+-- We assume a (hopefully reasonable) chunk size, and continue until we find
+-- the delimiter.
+readLineSepBy :: String -> Prog String
+readLineSepBy sep = do
+  let chunkSize = 256
+  strings <- ArrayColl.newArray
+  continue <- newShowRef true
+  
+  whileM_ (hasMoreAnd continue) do
+    buffer <- fst <$> peekBuffer chunkSize
+    string <- Buffer.toString UTF8 buffer # liftEffect
+
+    if hasSep string then do
+      -- Add the last part of the line, and then stop.
+      last <- getPrefix string
+      ArrayColl.addLast strings last
+      continue := false
+    else do 
+      -- Pattern was not found. Add the string and then continue.
+      ArrayColl.addLast strings string
+      continue := true
+    
+  actualString <- getString strings
+  moveFileForwardBy actualString
+  pure actualString
+  
+  where 
+  hasMoreAnd continue = (notM isEof &&= aread continue)
+
+  hasSep str = String.contains (String.Pattern sep) str
+  
+  getPrefix str = do 
+    let 
+      splits = String.split (String.Pattern sep) str
+      mprefix = Array.head splits
+    forceMaybe' "Expected prefix before the separator" mprefix
+  
+  getString strings = do
+    chunks <- aread strings
+    pure $ String.joinWith "" chunks
+    
+  moveFileForwardBy string = do
+    buffer <- Buffer.fromString string UTF8 # liftEffect
+    count <- Buffer.size buffer # liftEffect
+    seekBy (count + String.length sep)
